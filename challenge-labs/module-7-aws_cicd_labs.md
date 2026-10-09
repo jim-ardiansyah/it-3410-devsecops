@@ -2,6 +2,10 @@
 
 This workbook guides you through building a complete continuous integration pipeline on AWS using CodeCommit, CodeBuild, CodePipeline, and SNS. Complete the labs in order — each one builds on the previous.
 
+> **Lab assets:** You need two files from the lab assets folder: `demo.cpp` (Lab 2) and `sns-access-policy.json` (Lab 5). Both are reproduced in full in the labs below in case you do not have the assets folder.
+
+> **Region:** Create every resource in the **same AWS region** (for example, `us-east-1`). CodePipeline and the notification rule can only see resources in the region you are working in.
+
 ## Table of Contents
 1. [Creating a Repository in AWS CodeCommit](#lab-1-creating-a-repository-in-aws-codecommit)
 2. [Committing a File to AWS CodeCommit](#lab-2-committing-a-file-to-aws-codecommit)
@@ -18,7 +22,7 @@ This workbook guides you through building a complete continuous integration pipe
 # Lab 1: Creating a Repository in AWS CodeCommit
 
 ## Objective
-In this lab, you will create a new source code repository in AWS CodeCommit. This repository will store your application code and will later be connected to an automated deployment pipeline, so that any new code pushed to the repository is automatically deployed to a set of EC2 instances.
+In this lab, you will create a new source code repository in AWS CodeCommit. This repository will store your application code and will later be connected to an automated continuous integration (CI) pipeline, so that any new code pushed to the repository is automatically built and any build failure is reported by email.
 
 ## Prerequisites
 - An active AWS account with access to the AWS Management Console
@@ -73,7 +77,7 @@ Submit a screenshot showing:
 2. Why would a team choose to use CodeCommit instead of a third-party Git hosting service?
 3. What does the Clone URL allow you to do, and what is the difference between the HTTPS and SSH options?
 4. Why is it important that the repository is empty when first created before pushing existing local code to it?
-5. How does connecting CodeCommit to a pipeline enable automated deployments to EC2 instances?
+5. How does connecting CodeCommit to a pipeline enable automated builds, and what would be needed to extend it to automated deployments to EC2 instances?
 
 ---
 
@@ -84,7 +88,26 @@ In this lab, you will add the sample C++ source file provided by the development
 
 ## Prerequisites
 - Lab 1 is complete and the `DemoRepo` repository exists in AWS CodeCommit
-- The `demo.cpp` file is available on your local workstation
+- The `demo.cpp` file is available on your local workstation (from the lab assets, or create it from the listing below)
+
+## Lab Asset: demo.cpp
+If you do not have the file, create `demo.cpp` with exactly this content. The file **must end with the closing brace `}` of `main()` on its own line**, because Lab 8 removes that line to cause a build failure.
+
+```cpp
+#include <iostream>
+#include <string>
+
+int main() {
+    std::string appName = "CI/CD Pipeline Demo";
+    int buildNumber = 1;
+
+    std::cout << "Hello from " << appName << "!" << std::endl;
+    std::cout << "Build number: " << buildNumber << std::endl;
+    std::cout << "If you can read this, CodeBuild compiled the code successfully." << std::endl;
+
+    return 0;
+}
+```
 - You have sufficient IAM permissions to commit files to the repository
 
 ## Instructions
@@ -94,6 +117,8 @@ In the AWS Management Console, search for `CodeCommit` and open the service. On 
 
 **Step 2 — Open the file editor.**
 Inside the repository, click the **Add file** button and select **Create file** from the dropdown menu.
+
+> **Note:** Because `DemoRepo` is empty, this first commit also creates the repository's default branch, **`main`**. Later labs depend on this branch name. After committing, confirm the branch selector at the top of the repository page shows `main`.
 
 > **Tip:** If you prefer to upload the file directly rather than copying its contents, select **Upload file** from the same dropdown instead and skip to Step 4.
 
@@ -175,7 +200,7 @@ phases:
 Here is what each section does:
 
 - `version: 0.2` — specifies the buildspec format version. Version 0.2 is the current standard
-- `install` phase — updates the package list and installs `build-essential`, which provides the `g++` C++ compiler and related build tools
+- `install` phase — updates the package list and installs `build-essential`, which provides the `g++` C++ compiler and related build tools. (The CodeBuild Standard image already includes `g++`; this step guarantees it and shows how dependencies are installed. Commands run as root, so `sudo` is not needed.)
 - `build` phase — compiles `demo.cpp` using `g++` and outputs an executable named `democode`
 
 **Step 2 — Open your repository.**
@@ -274,15 +299,18 @@ In the **Source** section, fill in the following details to connect CodeBuild to
 **Step 5 — Configure the build environment.**
 In the **Environment** section, fill in the following details. These settings define the virtual machine that CodeBuild will use to run your build:
 
+- **Provisioning model:** `On-demand`
 - **Environment image:** `Managed image`
+- **Compute:** `EC2`
 - **Operating system:** `Ubuntu`
-- **Runtime:** `Standard`
-- **Image:** `aws/codebuild/standard:5.0`
+- **Runtime(s):** `Standard`
+- **Image:** `aws/codebuild/standard:7.0`
 - **Image version:** `Always use the latest image for this runtime version`
-- **Environment type:** `Linux`
 - **Service role:** `New service role`
 
-> **Note:** Choosing **New service role** allows AWS to automatically create an IAM role with the permissions CodeBuild needs to access your CodeCommit repository and write build logs to CloudWatch. The role name will be generated automatically and can be reviewed after the project is created.
+> **Note:** Older versions of this lab used `aws/codebuild/standard:5.0`. That image is deprecated and no longer listed in the console. Use `standard:7.0`. If your console shows a newer Standard image (such as `8.0`), it will also work. Some console versions show an **Environment type** field instead of **Compute**; choose `Linux` / `Linux EC2`.
+
+> **Note:** Choosing **New service role** allows AWS to automatically create an IAM role with the permissions CodeBuild needs to access your CodeCommit repository and write build logs to CloudWatch. The role is named `codebuild-DemoBuild-service-role` by default; note this name, because you will delete it in Lab 9.
 
 ---
 
@@ -309,7 +337,7 @@ Scroll to the bottom of the page and click the **Create build project** button. 
 On the project console page, confirm the following:
 - The project name shows **DemoBuild**
 - The source shows **DemoRepo** on the **main** branch
-- The environment shows the **Ubuntu Standard 5.0** managed image
+- The environment shows the **Ubuntu Standard 7.0** managed image
 - The buildspec shows **buildspec.yml**
 
 ## Deliverables
@@ -331,7 +359,7 @@ Submit a screenshot showing:
 # Lab 5: Creating an SNS Topic for Build Failure Notifications
 
 ## Objective
-In this lab, you will create an Amazon Simple Notification Service (SNS) topic that enables AWS CodeBuild to send email notifications to developers when a build fails. You will configure a custom access policy that grants CodeBuild permission to publish messages to the topic, add your email address as a subscriber, and confirm the subscription. By the end of this lab, your notification pipeline will be ready to alert the team of any build failures.
+In this lab, you will create an Amazon Simple Notification Service (SNS) topic that enables AWS CodeBuild to send email notifications to developers when a build fails. You will configure a custom access policy that grants AWS CodeStar Notifications (the service that delivers CodeBuild notification rules) permission to publish messages to the topic, add your email address as a subscriber, and confirm the subscription. By the end of this lab, your notification pipeline will be ready to alert the team of any build failures.
 
 ## Prerequisites
 - Labs 1 through 4 are complete and the `DemoBuild` CodeBuild project exists
@@ -340,7 +368,7 @@ In this lab, you will create an Amazon Simple Notification Service (SNS) topic t
 - You have access to the email inbox you will use as the notification endpoint
 
 ## Background: What is Amazon SNS?
-Amazon Simple Notification Service (SNS) is a fully managed messaging service that enables applications and services to send notifications to subscribers. In this lab, SNS acts as the bridge between CodeBuild and your email inbox. When CodeBuild detects a build failure, it publishes a message to the SNS topic, which then delivers that message to all confirmed subscribers.
+Amazon Simple Notification Service (SNS) is a fully managed messaging service that enables applications and services to send notifications to subscribers. In this lab, SNS acts as the bridge between CodeBuild and your email inbox. When a CodeBuild build fails, the notification rule you create in Lab 6 sends the event through AWS CodeStar Notifications, which publishes a message to the SNS topic. SNS then delivers that message to all confirmed subscribers. Because the publisher is the CodeStar Notifications service (`codestar-notifications.amazonaws.com`), not CodeBuild itself, the topic's access policy must allow that service to publish.
 
 ## Instructions
 
@@ -374,13 +402,60 @@ Scroll down the Create topic page to the **Access policy** section and expand it
 Under **Choose method**, click **Advanced** to open the JSON policy editor.
 
 **Step 6 — Enter the custom access policy.**
-In the JSON editor, replace the existing policy with the custom policy from the `sns-access-policy.json` file in your lab assets. Before saving, update the following placeholder values in the policy to match your environment:
+In the JSON editor, select all of the existing policy and replace it with the custom policy from the `sns-access-policy.json` file in your lab assets (reproduced below). Then replace every placeholder:
 
-- **Region** — the AWS region where your resources are located (for example, `us-east-1`)
-- **Account ID** — your 12-digit AWS account number
-- **Topic name** — `fail-build-topic`
+- `REGION` (2 places) — the AWS region where your resources are located (for example, `us-east-1`)
+- `ACCOUNT_ID` (4 places) — your 12-digit AWS account number, with no dashes
 
-The policy grants CodeBuild permission to publish messages to this SNS topic. The final `Resource` value in the policy should follow this format:
+```json
+{
+  "Version": "2008-10-17",
+  "Id": "fail-build-topic-policy",
+  "Statement": [
+    {
+      "Sid": "__default_statement_ID",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "*"
+      },
+      "Action": [
+        "SNS:GetTopicAttributes",
+        "SNS:SetTopicAttributes",
+        "SNS:AddPermission",
+        "SNS:RemovePermission",
+        "SNS:DeleteTopic",
+        "SNS:Subscribe",
+        "SNS:ListSubscriptionsByTopic",
+        "SNS:Publish"
+      ],
+      "Resource": "arn:aws:sns:REGION:ACCOUNT_ID:fail-build-topic",
+      "Condition": {
+        "StringEquals": {
+          "AWS:SourceOwner": "ACCOUNT_ID"
+        }
+      }
+    },
+    {
+      "Sid": "AWSCodeStarNotifications_publish",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": [
+          "codestar-notifications.amazonaws.com"
+        ]
+      },
+      "Action": "SNS:Publish",
+      "Resource": "arn:aws:sns:REGION:ACCOUNT_ID:fail-build-topic",
+      "Condition": {
+        "StringEquals": {
+          "aws:SourceAccount": "ACCOUNT_ID"
+        }
+      }
+    }
+  ]
+}
+```
+
+The first statement is the SNS default policy, which lets your own account manage the topic. The second statement is the one this lab needs: it allows the CodeStar Notifications service to publish to this topic, but only on behalf of your account. After replacing the placeholders, both `Resource` values should look like this:
 ```
 arn:aws:sns:us-east-1:123456789012:fail-build-topic
 ```
@@ -444,7 +519,7 @@ Submit a screenshot showing:
 
 ## Review Questions
 1. What is Amazon SNS, and how does it differ from Amazon SQS?
-2. Why is a custom access policy required to allow CodeBuild to publish messages to the SNS topic?
+2. Why is a custom access policy required, and why does it name `codestar-notifications.amazonaws.com` as the principal rather than CodeBuild?
 3. What does the `Resource` element in the SNS access policy represent, and why must it be specific to your topic ARN?
 4. Why does the email subscription start in a **Pending confirmation** state, and what security purpose does the confirmation step serve?
 5. In a real development environment, what other types of endpoints besides email could be used as SNS subscribers to receive build failure notifications?
@@ -472,11 +547,13 @@ AWS CodeBuild notification rules allow you to define which build events should t
 **Step 1 — Navigate to your CodeBuild project.**
 In the AWS Management Console, search for `CodeBuild` and open the service. In the left navigation panel, expand **Build** and choose **Build projects**. Click on **DemoBuild** to open the project.
 
-**Step 2 — Open the Notifications settings.**
-In the left navigation panel of the DemoBuild project, click **Settings** to expand the settings menu, then click **Notifications**.
+**Step 2 — Open the notification menu.**
+On the **DemoBuild** project page, click the **Notify** dropdown at the top of the page.
 
 **Step 3 — Begin creating a notification rule.**
-On the Notifications page, click **Create notification rule**.
+From the **Notify** dropdown, choose **Create notification rule**.
+
+> **Alternative:** You can also open **Settings → Notification rules** in the CodeBuild left navigation and click **Create notification rule**. If you go this way, set the **Source** to the `DemoBuild` project.
 
 ---
 
@@ -488,7 +565,7 @@ In the notification rule configuration form, fill in the following:
 - **Notification name:** `fail-build-notification`
 - **Detail type:** `Full`
 
-> **Note:** Choosing **Full** means the notification message will include complete details about the build event, such as the project name, build ID, build status, and a link to the build logs. The **Basic** option sends a shorter summary with fewer details.
+> **Note:** Choosing **Full** means the notification message will include complete details about the build event, such as the project name, build ID, build status, and the failed phase. The **Basic** option sends a shorter summary with fewer details.
 
 **Step 5 — Select the trigger events.**
 In the **Events that trigger notifications** section, select the following events:
@@ -499,7 +576,7 @@ Under **Build state:**
 Under **Build phase:**
 - ☑ `Failure`
 
-> **Note:** Selecting events under both **Build state** and **Build phase** ensures comprehensive coverage. A **Build state** event of `Failed` is triggered when the overall build job fails. A **Build phase** event of `Failure` is triggered when a specific phase within the build — such as the `install` or `build` phase — fails. Together, they ensure no failure goes unnoticed.
+> **Note:** Selecting events under both **Build state** and **Build phase** ensures comprehensive coverage. A **Build state** event of `Failed` is triggered when the overall build job fails. A **Build phase** event of `Failure` is triggered when a specific phase within the build — such as the `install` or `build` phase — fails. Together, they ensure no failure goes unnoticed. Expect a single failure to produce **two** emails: one for the phase failure and one for the build failure.
 
 Leave all other events unchecked for this lab.
 
@@ -533,7 +610,7 @@ After submitting, you will be redirected to the notification rule detail page. C
 **Step 9 — Verify the notification target status.**
 Scroll to the bottom of the notification rule detail page and locate the **Notification targets** section. Confirm that the target status for `fail-build-topic` is set to **Active**.
 
-> **Troubleshooting:** If the target status shows **Unreachable**, this indicates a problem with the SNS access policy configured in Lab 5. Return to the `fail-build-topic` SNS topic and verify that the access policy correctly grants CodeBuild permission to publish messages to the topic. Pay close attention to the `Resource` ARN, `Account ID`, and `Region` values in the policy.
+> **Troubleshooting:** If the target status shows **Unreachable**, this indicates a problem with the SNS access policy configured in Lab 5. Return to the `fail-build-topic` SNS topic and verify that the access policy contains the `AWSCodeStarNotifications_publish` statement with `codestar-notifications.amazonaws.com` as the principal. Pay close attention to the `Resource` ARN, `Account ID`, and `Region` values in the policy.
 
 ## Deliverables
 Submit a screenshot showing:
@@ -546,7 +623,7 @@ Submit a screenshot showing:
 1. What is the difference between a **Build state** event and a **Build phase** event in CodeBuild notifications?
 2. Why is the **Full** detail type preferable over **Basic** for a build failure notification sent to developers?
 3. What does a target status of **Unreachable** indicate, and what is the most likely cause?
-4. What AWS service acts as the bridge between CodeBuild events and the SNS topic in this notification setup?
+4. What AWS service acts as the bridge between CodeBuild events and the SNS topic in this notification setup, and where does it appear in the SNS access policy?
 5. In a production environment, how might you extend this notification setup to alert different teams for different types of events?
 
 ---
@@ -576,6 +653,9 @@ In the AWS Management Console, click the search bar at the top of the page, type
 **Step 2 — Begin creating a pipeline.**
 On the CodePipeline home page, click the **Create pipeline** button.
 
+**Step 2a — Choose a creation option.**
+If the console asks how you want to create the pipeline, choose **Build custom pipeline** and click **Next**. (Do not choose a template.)
+
 ---
 
 ### Part B: Configure Pipeline Settings
@@ -584,6 +664,7 @@ On the CodePipeline home page, click the **Create pipeline** button.
 In the **Pipeline settings** section, fill in the following:
 
 - **Pipeline name:** `MyFirstPipeline`
+- **Execution mode:** `Queued` (default; leave as-is if shown)
 - **Service role:** `New service role`
 
 > **Note:** Selecting **New service role** allows AWS to automatically create an IAM role that grants CodePipeline the permissions it needs to interact with CodeCommit, CodeBuild, and other AWS services used in the pipeline.
@@ -602,11 +683,11 @@ In the **Add source stage** step, fill in the following details:
 - **Repository name:** `DemoRepo`
 - **Branch name:** `main`
 
-After selecting the repository and branch, a message will appear confirming that an Amazon CloudWatch Events rule will be created for this pipeline. This rule enables CodePipeline to automatically detect changes when new code is pushed to the `main` branch.
+After selecting the repository and branch, a message will appear confirming that an Amazon EventBridge rule will be created for this pipeline. This rule enables CodePipeline to automatically detect changes when new code is pushed to the `main` branch.
 
-Under **Change detection options**, leave the default setting as **Amazon CloudWatch Events (recommended)**.
+Under **Change detection options**, leave the default setting as **Amazon EventBridge (recommended)**. Leave **Output artifact format** at its default (**CodePipeline default**).
 
-> **Note:** CloudWatch Events is the preferred detection method because it triggers the pipeline immediately when a change is detected, rather than polling the repository on a schedule. This means your pipeline will start within seconds of a code push.
+> **Note:** Amazon EventBridge (formerly called Amazon CloudWatch Events) is the preferred detection method because it triggers the pipeline immediately when a change is detected, rather than polling the repository on a schedule. This means your pipeline will start within seconds of a code push.
 
 Click **Next** to proceed.
 
@@ -617,11 +698,13 @@ Click **Next** to proceed.
 **Step 6 — Configure the build provider.**
 In the **Add build stage** step, fill in the following details:
 
-- **Build provider:** `AWS CodeBuild`
+- **Build provider:** `AWS CodeBuild` (in newer consoles, choose **Other build providers**, then select **AWS CodeBuild** from the dropdown)
 - **Region:** Ensure the correct AWS region is selected — it must match the region where `DemoBuild` was created
 - **Project name:** `DemoBuild`
 
 Click **Next** to proceed.
+
+> **Note:** If the console shows an **Add test stage** step, click **Skip test stage** and confirm.
 
 ---
 
@@ -667,7 +750,7 @@ After the pipeline is created, you will see a success message and the pipeline w
 **Step 10 — Confirm both stages succeeded.**
 Once the pipeline completes, confirm that both stages show a **Succeeded** status. This confirms the full CI pipeline is working end to end.
 
-> **Troubleshooting:** If you see an error message stating `The provided role cannot be assumed: Access denied when attempting to assume the role`, click the **Release change** button on the pipeline page to retry the execution. This is a known timing issue that occurs occasionally when a new service role has just been created and IAM permissions have not fully propagated yet.
+> **Troubleshooting:** If the Build stage fails on the first run, click **View details** to read the error. If it says `The provided role cannot be assumed: Access denied when attempting to assume the role`, click the **Release change** button on the pipeline page to retry the execution. This is a known timing issue that occurs occasionally when a new service role has just been created and IAM permissions have not fully propagated yet.
 
 ## Deliverables
 Submit a screenshot showing:
@@ -677,7 +760,7 @@ Submit a screenshot showing:
 - Step 10 — the pipeline console showing **Succeeded** status for both the Source and Build stages
 
 ## Review Questions
-1. What is the purpose of the CloudWatch Events rule that is created when configuring the Source stage, and how does it differ from polling?
+1. What is the purpose of the EventBridge rule that is created when configuring the Source stage, and how does it differ from polling?
 2. Why is a new IAM service role created for CodePipeline, and what AWS services does it typically need permission to access?
 3. What would happen to the pipeline if a developer pushed code with a syntax error in `demo.cpp`? Which stage would fail, and what notification would be triggered?
 4. What is the difference between a CI pipeline and a CD pipeline, and what would need to be added to `MyFirstPipeline` to make it a full CI/CD pipeline?
@@ -742,7 +825,7 @@ Click **Commit changes**. You will be redirected to the repository home page con
 In the AWS Management Console, search for `CodePipeline` and open the service. Click on **MyFirstPipeline** to open the pipeline.
 
 **Step 8 — Watch the pipeline execute.**
-The pipeline will automatically detect the new commit on the `main` branch via the CloudWatch Events rule and begin executing within a few minutes. Watch the progress of each stage:
+The pipeline will automatically detect the new commit on the `main` branch via the EventBridge rule and usually begins executing within a minute. Watch the progress of each stage:
 
 - The **Source** stage should turn green and show **Succeeded**, confirming CodePipeline successfully pulled the updated code from `DemoRepo`
 - The **Build** stage should turn red and show **Failed**, confirming CodeBuild encountered the syntax error during compilation
@@ -750,8 +833,11 @@ The pipeline will automatically detect the new commit on the `main` branch via t
 **Step 9 — Review the build failure details.**
 Click on the **Details** link within the failed Build stage to open the CodeBuild build log. Review the error output to confirm the failure was caused by the missing closing brace. You should see a compiler error similar to the following:
 ```
-demo.cpp: error: expected '}' at end of input
+demo.cpp: In function 'int main()':
+demo.cpp:12:14: error: expected '}' at end of input
+demo.cpp:4:12: note: to match this '{'
 ```
+The log will then show `COMMAND_EXECUTION_ERROR` for the BUILD phase.
 
 ---
 
@@ -761,13 +847,15 @@ demo.cpp: error: expected '}' at end of input
 Open the email inbox you subscribed with during Lab 5. Look for a new notification email from **AWS Notifications**. The email should arrive within a few minutes of the build failure.
 
 **Step 11 — Review the notification contents.**
-Open the email and verify that it contains the following details:
+You should receive **two** emails: one from the **Build phase: Failure** event and one from the **Build state: Failed** event. SNS email delivers the notification as a JSON message, so it is not formatted like a normal email. Look through the JSON and find the following details:
 
-- The name of the CodeBuild project (`DemoBuild`)
-- The build status (`FAILED`)
-- The build phase that failed (`BUILD`)
-- A link to the build logs in the AWS Console
-- The date and time of the failure
+- The name of the CodeBuild project (`"project-name": "DemoBuild"`)
+- The build status (`"build-status": "FAILED"`)
+- The build phase that failed (`"completed-phase": "BUILD"`, in the phase-failure email)
+- The build ID, which you can use to find the build logs in the CodeBuild console
+- The date and time of the failure (`"time"`)
+
+> **Tip:** If no email arrives within about 10 minutes, check your spam folder, then confirm the notification target in Lab 6, Step 9 still shows **Active**.
 
 ---
 
@@ -809,7 +897,7 @@ Submit a screenshot showing:
 # Lab 9: Cleaning Up AWS Resources
 
 ## Objective
-In this lab, you will delete all AWS resources created during the CI pipeline proof of concept. Cleaning up resources is an essential practice to avoid unnecessary charges and keep your AWS account organized. You will delete the CodeCommit repository, CodePipeline pipeline, CodeBuild project, SNS topic, and the IAM roles and policies that were automatically created during the setup.
+In this lab, you will delete all AWS resources created during the CI pipeline proof of concept. Cleaning up resources is an essential practice to avoid unnecessary charges and keep your AWS account organized. You will delete the notification rule, CodeCommit repository, CodePipeline pipeline and its artifact bucket, CodeBuild project and its logs, SNS topic, and the IAM roles and policies that were automatically created during the setup.
 
 ## Prerequisites
 - All previous labs are complete
@@ -822,14 +910,28 @@ In this lab, you will delete all AWS resources created during the CI pipeline pr
 
 | Resource | Name |
 |---|---|
+| Notification Rule | fail-build-notification |
 | CodeCommit Repository | DemoRepo |
 | CodePipeline Pipeline | MyFirstPipeline |
+| EventBridge Rule | codepipeline-DemoRe-main-*-rule (created by the pipeline) |
+| S3 Artifact Bucket | codepipeline-<region>-* (created by the pipeline) |
 | CodeBuild Project | DemoBuild |
+| CloudWatch Log Group | /aws/codebuild/DemoBuild |
 | SNS Topic | fail-build-topic |
-| IAM Role | AWSCodePipelineServiceRole-* |
-| IAM Policy | AWSCodePipelineServiceRole-*-MyFirstPipeline |
+| IAM Roles | AWSCodePipelineServiceRole-<region>-MyFirstPipeline, codebuild-DemoBuild-service-role, and (if present) cwe-role-<region>-MyFirstPipeline |
+| IAM Policies | AWSCodePipelineServiceRole-<region>-MyFirstPipeline, CodeBuildBasePolicy-DemoBuild-<region>, and (if present) start-pipeline-execution-<region>-MyFirstPipeline |
 
 ## Instructions
+
+### Step 0 — Delete the Notification Rule
+
+**0.1 —** Open the CodeBuild console, open the **DemoBuild** project, and choose **Notify → Manage notification rules** (or open **Settings → Notification rules** in the left navigation).
+
+**0.2 —** Select **fail-build-notification**, click **Delete**, type `delete` if prompted, and confirm.
+
+> **Note:** Delete the rule first. A rule left behind after its project and topic are deleted keeps appearing in the notification rules list.
+
+---
 
 ### Step 1 — Delete the CodeCommit Repository
 
@@ -857,7 +959,15 @@ In the left navigation panel, click **Pipelines**. Select the checkbox next to *
 **2.3 — Delete the pipeline.**
 Click the **Delete pipeline** button. A confirmation dialog will appear. Type `delete` in the confirmation field and click **Delete**.
 
-> **Note:** Deleting the pipeline does not delete the associated source repository or build project. Those must be deleted separately in the steps below.
+> **Note:** Deleting the pipeline does not delete the associated source repository, build project, artifact bucket, or (in some cases) the EventBridge rule. Those must be deleted separately in the steps below.
+
+**2.4 — Delete the EventBridge rule (if it remains).**
+Open the **Amazon EventBridge** console and click **Rules**. If a rule whose name starts with `codepipeline-DemoRe-main` is listed, select it, click **Delete**, type `delete`, and confirm.
+
+**2.5 — Delete the pipeline artifact bucket.**
+Open the **S3** console. Find the bucket whose name starts with `codepipeline-<region>-` (for example, `codepipeline-us-east-1-123456789012`). Select it and click **Empty**, type `permanently delete`, and confirm. Then select it again, click **Delete**, type the bucket name, and confirm.
+
+> **Caution:** If you have other pipelines in this region, they may share this bucket. Only delete it if `MyFirstPipeline` was your only pipeline.
 
 ---
 
@@ -870,7 +980,10 @@ In the AWS Management Console, search for `CodeBuild` and open the service.
 In the left navigation panel, expand **Build** and click **Build projects**. Select the checkbox next to **DemoBuild**.
 
 **3.3 — Delete the project.**
-Click the **Delete build project** button. A confirmation dialog will appear. Confirm the deletion to permanently remove the project.
+Click **Actions → Delete** (labeled **Delete build project** in some console versions). Type `delete` in the confirmation field and click **Delete**.
+
+**3.4 — Delete the build log group.**
+Open the **CloudWatch** console, click **Logs → Log groups**, select `/aws/codebuild/DemoBuild`, and choose **Actions → Delete log group(s)**. Confirm the deletion.
 
 ---
 
@@ -892,7 +1005,7 @@ Click the **Delete** button. A confirmation dialog will appear. Type `delete me`
 
 ---
 
-### Step 5 — Delete the IAM Role
+### Step 5 — Delete the IAM Roles
 
 **5.1 — Open the IAM console.**
 In the AWS Management Console, search for `IAM` and open the service.
@@ -909,9 +1022,15 @@ AWSCodePipelineServiceRole-
 **5.4 — Delete the role.**
 Select the checkbox next to the role name and click **Delete**. A confirmation dialog will appear. Confirm the role name in the field provided and click **Delete**.
 
+**5.5 — Delete the CodeBuild service role.**
+Clear the search bar, type `codebuild-DemoBuild`, and delete the role `codebuild-DemoBuild-service-role` the same way.
+
+**5.6 — Delete the EventBridge role (if present).**
+Clear the search bar, type `cwe-role`, and delete the role ending in `MyFirstPipeline`, if one exists.
+
 ---
 
-### Step 6 — Delete the IAM Policy
+### Step 6 — Delete the IAM Policies
 
 **6.1 — Navigate to Policies.**
 In the IAM console, click **Policies** in the left navigation panel.
@@ -929,7 +1048,14 @@ AWSCodePipelineServiceRole-us-east-1-MyFirstPipeline
 > **Note:** If you created the pipeline in a different region, substitute the correct region code in the policy name.
 
 **6.3 — Delete the policy.**
-Click on the policy name to open it. Click the **Actions** dropdown and select **Delete**. A confirmation dialog will appear. Click **Delete** to confirm.
+Select the policy, click **Delete**, type the policy name in the confirmation field, and click **Delete**.
+
+**6.4 — Delete the remaining policies.**
+Repeat the search and deletion for each policy below:
+- `CodeBuildBasePolicy-DemoBuild-<region>`
+- `start-pipeline-execution-<region>-MyFirstPipeline`, if present
+
+> **Note:** Because you deleted the roles in Step 5, these policies are no longer attached to anything and can be deleted directly.
 
 ---
 
@@ -943,13 +1069,19 @@ After completing all deletions, perform a final check to confirm that no resourc
 | CodePipeline | MyFirstPipeline no longer appears on the Pipelines page |
 | CodeBuild | DemoBuild no longer appears on the Build projects page |
 | SNS | fail-build-topic no longer appears on the Topics page |
-| IAM Roles | No role starting with `AWSCodePipelineServiceRole-` remains |
-| IAM Policies | No policy matching `AWSCodePipelineServiceRole-*-MyFirstPipeline` remains |
+| CodeBuild notification rules | fail-build-notification no longer appears |
+| EventBridge | No rule starting with `codepipeline-DemoRe-main` remains |
+| S3 | No `codepipeline-<region>-*` artifact bucket remains (unless used by another pipeline) |
+| CloudWatch Logs | `/aws/codebuild/DemoBuild` no longer appears |
+| IAM Roles | No `AWSCodePipelineServiceRole-*`, `codebuild-DemoBuild-service-role`, or `cwe-role-*-MyFirstPipeline` role remains |
+| IAM Policies | No `AWSCodePipelineServiceRole-*-MyFirstPipeline`, `CodeBuildBasePolicy-DemoBuild-*`, or `start-pipeline-execution-*-MyFirstPipeline` policy remains |
 
 ## Deliverables
 Submit a screenshot showing:
 - Step 1.3 — the CodeCommit deletion confirmation dialog with `delete` typed in
 - Step 2.3 — the CodePipeline deletion confirmation dialog with `delete` typed in
+- Step 0.2 — the notification rule deletion confirmation
+- Step 2.5 — the S3 artifact bucket deletion confirmation
 - Step 3.3 — the CodeBuild project deletion confirmation
 - Step 4.4 — the SNS topic deletion confirmation dialog with `delete me` typed in
 - Step 7 — each service console confirming the deleted resources no longer appear
