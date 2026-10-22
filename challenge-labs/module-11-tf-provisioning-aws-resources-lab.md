@@ -1,7 +1,5 @@
 # Terraform Labs: Provisioning AWS Resources
 
-Oct 22, 2026 · @Kyle Anderson
-
 This workbook guides you through provisioning AWS infrastructure as code with Terraform, starting from a fresh Windows workstation. Complete the labs in order — each one builds on the previous.
 
 > **Lab assets:** All Terraform files used in these labs are reproduced in full below. Create each lab in its own folder under `C:\tf-labs` (for example, `C:\tf-labs\lab2`).
